@@ -1,0 +1,245 @@
+--[[
+	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your risk!
+]]
+
+function missing(t, f, fallback)
+    if type(f) == t then return f end
+    return fallback 
+end
+
+cloneref = missing("function", cloneref, function(...) return ... end)
+
+local Services = setmetatable({}, {
+    __index = function(_, name)
+        return cloneref(game:GetService(name))
+    end
+})
+
+local Players = Services.Players
+local RunService = Services.RunService
+local UserInputService = Services.UserInputService
+local TweenService = Services.TweenService
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local rootPart = character:WaitForChild("HumanoidRootPart")
+
+player.CharacterAdded:Connect(function(newCharacter)
+    character = newCharacter
+    humanoid = character:WaitForChild("Humanoid")
+    rootPart = character:WaitForChild("HumanoidRootPart")
+end)
+
+--// Settings
+local Settings = {}
+Settings["Stop On Move"] = false
+Settings["Fade In"]     = 0.1
+Settings["Fade Out"]    = 0.1
+Settings["Weight"]      = 1
+Settings["Speed"]       = 1
+Settings["Allow Invisible"] = true
+Settings["Time Position"] = 0
+
+local CurrentTrack
+
+local function LoadTrack(id)
+    if CurrentTrack then 
+        CurrentTrack:Stop(0) 
+    end
+
+    local animId
+    local ok, result = pcall(function()
+        return game:GetObjects("rbxassetid://" .. tostring(id))
+    end)
+
+    if ok and result and #result > 0 then
+        local anim = result[1]
+        if anim:IsA("Animation") then
+            animId = anim.AnimationId
+        else
+            animId = "rbxassetid://" .. tostring(id)
+        end
+    else
+        animId = "rbxassetid://" .. tostring(id)
+    end
+
+    local newAnim = Instance.new("Animation")
+    newAnim.AnimationId = animId
+    local newTrack = humanoid:LoadAnimation(newAnim)
+    newTrack.Priority = Enum.AnimationPriority.Action4
+
+    local weight = Settings["Weight"]
+    if weight == 0 then
+        weight = 0.001
+    end
+
+    newTrack:Play(Settings["Fade In"], weight, Settings["Speed"])
+    
+    CurrentTrack = newTrack
+    CurrentTrack.TimePosition = math.clamp(Settings["Time Position"], 0, 1) * CurrentTrack.Length
+
+    return newTrack
+end
+
+local function StopTrack()
+    if CurrentTrack then
+        CurrentTrack:Stop(Settings["Fade Out"])
+        CurrentTrack = nil
+    end
+end
+
+-- Create the Multi-Jump Tool
+local tool = Instance.new("Tool")
+tool.Name = "Double Jump Tool"
+tool.RequiresHandle = false
+tool.Parent = player:WaitForChild("Backpack")
+
+local jumpsLeft = 0
+local maxJumps = 2 -- Allows 2 mid-air jumps
+
+humanoid.StateChanged:Connect(function(_, newState)
+    if newState == Enum.HumanoidStateType.Jumping then
+        jumpsLeft = maxJumps
+    elseif newState == Enum.HumanoidStateType.Landed then
+        jumpsLeft = 0
+        -- Play land/fall emote ID: 99245053698139
+        LoadTrack(99245053698139)
+        task.delay(1.0, function()
+            StopTrack()
+        end)
+    end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+    if tool.Parent == character and jumpsLeft > 0 then
+        jumpsLeft = jumpsLeft - 1
+        
+        -- Apply upward velocity for mid-air jumps
+        if rootPart then
+            rootPart.AssemblyLinearVelocity = Vector3.new(rootPart.AssemblyLinearVelocity.X, 50, rootPart.AssemblyLinearVelocity.Z)
+        end
+        
+        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        
+        -- Play jump emote ID: 82207390279955
+        LoadTrack(82207390279955)
+    end
+end)
+
+-- Collision / Invisibility handling
+local originalCollisionStates = {}
+local lastFixClipState = Settings and Settings["Allow Invisible"]
+
+local function saveCollisionStates()
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") and part ~= rootPart then
+            originalCollisionStates[part] = part.CanCollide
+        end
+    end
+end
+
+local function disableCollisionsExceptRootPart()
+    if not Settings or not Settings["Allow Invisible"] then
+        return
+    end
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") and part ~= rootPart then
+            part.CanCollide = false
+        end
+    end
+end
+
+local function restoreCollisionStates()
+    for part, canCollide in pairs(originalCollisionStates) do
+        if part and part.Parent then
+            part.CanCollide = canCollide
+        end
+    end
+    originalCollisionStates = {}
+end
+
+saveCollisionStates()
+
+local connection
+connection = RunService.Stepped:Connect(function()
+    if character and character.Parent then
+        local currentFixClip = Settings and Settings["Allow Invisible"]
+        if lastFixClipState ~= currentFixClip then
+            if currentFixClip then
+                saveCollisionStates()
+                disableCollisionsExceptRootPart()
+            else
+                restoreCollisionStates()
+            end
+            lastFixClipState = currentFixClip
+        elseif currentFixClip then
+            disableCollisionsExceptRootPart()
+        end
+    else
+        restoreCollisionStates()
+        connection:Disconnect()
+    end
+end)
+
+player.CharacterAdded:Connect(function(newCharacter)
+    restoreCollisionStates()
+    character = newCharacter
+    humanoid = character:WaitForChild("Humanoid")
+    rootPart = character:WaitForChild("HumanoidRootPart")
+    
+    local newTool = Instance.new("Tool")
+    newTool.Name = "Double Jump Tool"
+    newTool.RequiresHandle = false
+    newTool.Parent = player:WaitForChild("Backpack")
+    
+    humanoid.StateChanged:Connect(function(_, newState)
+        if newState == Enum.HumanoidStateType.Jumping then
+            jumpsLeft = maxJumps
+        elseif newState == Enum.HumanoidStateType.Landed then
+            jumpsLeft = 0
+            LoadTrack(99245053698139)
+            task.delay(1.0, function()
+                StopTrack()
+            end)
+        end
+    end)
+
+    UserInputService.JumpRequest:Connect(function()
+        if newTool.Parent == character and jumpsLeft > 0 then
+            jumpsLeft = jumpsLeft - 1
+            if rootPart then
+                rootPart.AssemblyLinearVelocity = Vector3.new(rootPart.AssemblyLinearVelocity.X, 50, rootPart.AssemblyLinearVelocity.Z)
+            end
+            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+            LoadTrack(82207390279955)
+        end
+    end)
+    
+    saveCollisionStates()
+    lastFixClipState = Settings and Settings["Allow Invisible"]
+    
+    if connection then
+        connection:Disconnect()
+    end
+    
+    connection = RunService.Stepped:Connect(function()
+        if character and character.Parent then
+            local currentFixClip = Settings and Settings["Allow Invisible"]
+            if lastFixClipState ~= currentFixClip then
+                if currentFixClip then
+                    saveCollisionStates()
+                    disableCollisionsExceptRootPart()
+                else
+                    restoreCollisionStates()
+                end
+                lastFixClipState = currentFixClip
+            elseif currentFixClip then
+                disableCollisionsExceptRootPart()
+            end
+        else
+            restoreCollisionStates()
+            connection:Disconnect()
+        end
+    end)
+end)
