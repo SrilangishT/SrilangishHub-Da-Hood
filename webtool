@@ -1,0 +1,268 @@
+--[[
+	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your risk!
+]]
+
+function missing(t, f, fallback)
+    if type(f) == t then return f end
+    return fallback 
+end
+
+cloneref = missing("function", cloneref, function(...) return ... end)
+
+local Services = setmetatable({}, {
+    __index = function(_, name)
+        return cloneref(game:GetService(name))
+    end
+})
+
+local Players = Services.Players
+local RunService = Services.RunService
+local UserInputService = Services.UserInputService
+local TweenService = Services.TweenService
+
+local player = Players.LocalPlayer
+local mouse = player:GetMouse()
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local rootPart = character:WaitForChild("HumanoidRootPart")
+
+player.CharacterAdded:Connect(function(newCharacter)
+    character = newCharacter
+    humanoid = character:WaitForChild("Humanoid")
+    rootPart = character:WaitForChild("HumanoidRootPart")
+end)
+
+--// Settings
+local Settings = {}
+Settings["Stop On Move"] = false
+Settings["Fade In"]     = 0.1
+Settings["Fade Out"]    = 0.1
+Settings["Weight"]      = 1
+Settings["Speed"]       = 1
+Settings["Allow Invisible"] = true
+Settings["Time Position"] = 0
+
+local CurrentTrack
+
+local function LoadTrack(id)
+    if CurrentTrack then 
+        CurrentTrack:Stop(0) 
+    end
+
+    local animId
+    local ok, result = pcall(function()
+        return game:GetObjects("rbxassetid://" .. tostring(id))
+    end)
+
+    if ok and result and #result > 0 then
+        local anim = result[1]
+        if anim:IsA("Animation") then
+            animId = anim.AnimationId
+        else
+            animId = "rbxassetid://" .. tostring(id)
+        end
+    else
+        animId = "rbxassetid://" .. tostring(id)
+    end
+
+    local newAnim = Instance.new("Animation")
+    newAnim.AnimationId = animId
+    local newTrack = humanoid:LoadAnimation(newAnim)
+    newTrack.Priority = Enum.AnimationPriority.Action4
+
+    local weight = Settings["Weight"]
+    if weight == 0 then
+        weight = 0.001
+    end
+
+    newTrack:Play(Settings["Fade In"], weight, Settings["Speed"])
+    
+    CurrentTrack = newTrack
+    CurrentTrack.TimePosition = math.clamp(Settings["Time Position"], 0, 1) * CurrentTrack.Length
+
+    return newTrack
+end
+
+local function StopTrack()
+    if CurrentTrack then
+        CurrentTrack:Stop(Settings["Fade Out"])
+        CurrentTrack = nil
+    end
+end
+
+-- Create the Spider-Man Tool
+local tool = Instance.new("Tool")
+tool.Name = "Spider-Man Web"
+tool.RequiresHandle = false
+tool.Parent = player:WaitForChild("Backpack")
+
+local isSwinging = false
+
+local function startWebSwing(currentTool)
+    if not rootPart or isSwinging then return end
+    isSwinging = true
+
+    -- Zero out existing velocity to prevent flinging
+    rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+    rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+
+    -- Target position where mouse clicked
+    local targetPosition = mouse.Hit and mouse.Hit.Position or (rootPart.Position + rootPart.CFrame.LookVector * 50)
+
+    -- Create white neon target marker
+    local targetPart = Instance.new("Part")
+    targetPart.Size = Vector3.new(1, 1, 1)
+    targetPart.Shape = Enum.PartType.Ball
+    targetPart.Color = Color3.fromRGB(255, 255, 255)
+    targetPart.Material = Enum.Material.Neon
+    targetPart.Anchored = true
+    targetPart.CanCollide = false
+    targetPart.Position = targetPosition
+    targetPart.Parent = workspace
+
+    game:GetService("Debris"):AddItem(targetPart, 3)
+
+    -- Play Spider-Man emote (ID: 102580328524569)
+    LoadTrack(102580328524569)
+
+    -- Compute travel details
+    local startPos = rootPart.Position
+    local distance = (startPos - targetPosition).Magnitude
+    local speed = 60
+    local tweenTime = math.clamp(distance / speed, 0.25, 1.5)
+
+    -- Tilted target orientation
+    local lookCFrame = CFrame.new(targetPosition - Vector3.new(0, 2, 0), targetPosition)
+
+    -- Smooth movement while resetting velocity to avoid momentum flinging
+    local tweenInfo = TweenInfo.new(tweenTime, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+    local tween = TweenService:Create(rootPart, tweenInfo, {CFrame = lookCFrame})
+
+    local stepConnection
+    stepConnection = RunService.Heartbeat:Connect(function()
+        if rootPart then
+            rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+        end
+    end)
+
+    tween:Play()
+
+    tween.Completed:Connect(function()
+        if stepConnection then
+            stepConnection:Disconnect()
+        end
+
+        -- Safe landing velocity reset
+        if rootPart then
+            rootPart.AssemblyLinearVelocity = Vector3.new(0, -5, 0)
+            rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+        end
+
+        StopTrack()
+        if targetPart then targetPart:Destroy() end
+        isSwinging = false
+    end)
+end
+
+tool.Activated:Connect(function()
+    startWebSwing(tool)
+end)
+
+-- Collision / Invisibility handling
+local originalCollisionStates = {}
+local lastFixClipState = Settings and Settings["Allow Invisible"]
+
+local function saveCollisionStates()
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") and part ~= rootPart then
+            originalCollisionStates[part] = part.CanCollide
+        end
+    end
+end
+
+local function disableCollisionsExceptRootPart()
+    if not Settings or not Settings["Allow Invisible"] then
+        return
+    end
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") and part ~= rootPart then
+            part.CanCollide = false
+        end
+    end
+end
+
+local function restoreCollisionStates()
+    for part, canCollide in pairs(originalCollisionStates) do
+        if part and part.Parent then
+            part.CanCollide = canCollide
+        end
+    end
+    originalCollisionStates = {}
+end
+
+saveCollisionStates()
+
+local connection
+connection = RunService.Stepped:Connect(function()
+    if character and character.Parent then
+        local currentFixClip = Settings and Settings["Allow Invisible"]
+        if lastFixClipState ~= currentFixClip then
+            if currentFixClip then
+                saveCollisionStates()
+                disableCollisionsExceptRootPart()
+            else
+                restoreCollisionStates()
+            end
+            lastFixClipState = currentFixClip
+        elseif currentFixClip then
+            disableCollisionsExceptRootPart()
+        end
+    else
+        restoreCollisionStates()
+        connection:Disconnect()
+    end
+end)
+
+player.CharacterAdded:Connect(function(newCharacter)
+    restoreCollisionStates()
+    character = newCharacter
+    humanoid = character:WaitForChild("Humanoid")
+    rootPart = character:WaitForChild("HumanoidRootPart")
+    
+    local newTool = Instance.new("Tool")
+    newTool.Name = "Spider-Man Web"
+    newTool.RequiresHandle = false
+    newTool.Parent = player:WaitForChild("Backpack")
+    
+    newTool.Activated:Connect(function()
+        startWebSwing(newTool)
+    end)
+    
+    saveCollisionStates()
+    lastFixClipState = Settings and Settings["Allow Invisible"]
+    
+    if connection then
+        connection:Disconnect()
+    end
+    
+    connection = RunService.Stepped:Connect(function()
+        if character and character.Parent then
+            local currentFixClip = Settings and Settings["Allow Invisible"]
+            if lastFixClipState ~= currentFixClip then
+                if currentFixClip then
+                    saveCollisionStates()
+                    disableCollisionsExceptRootPart()
+                else
+                    restoreCollisionStates()
+                end
+                lastFixClipState = currentFixClip
+            elseif currentFixClip then
+                disableCollisionsExceptRootPart()
+            end
+        else
+            restoreCollisionStates()
+            connection:Disconnect()
+        end
+    end)
+end)
