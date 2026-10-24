@@ -1,0 +1,354 @@
+--[[
+	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your risk!
+]]
+
+function missing(t, f, fallback)
+    if type(f) == t then return f end
+    return fallback 
+end
+
+cloneref = missing("function", cloneref, function(...) return ... end)
+
+local Services = setmetatable({}, {
+    __index = function(_, name)
+        return cloneref(game:GetService(name))
+    end
+})
+
+local Players = Services.Players
+local RunService = Services.RunService
+local UserInputService = Services.UserInputService
+local TweenService = Services.TweenService
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local rootPart = character:WaitForChild("HumanoidRootPart")
+
+player.CharacterAdded:Connect(function(newCharacter)
+    character = newCharacter
+    humanoid = character:WaitForChild("Humanoid")
+    rootPart = character:WaitForChild("HumanoidRootPart")
+end)
+
+--// Settings
+local Settings = {}
+Settings["Stop On Move"] = false
+Settings["Fade In"]     = 0.1
+Settings["Fade Out"]    = 0.1
+Settings["Weight"]      = 1
+Settings["Speed"]       = 1
+Settings["Allow Invisible"] = true
+Settings["Time Position"] = 0
+
+local CurrentTrack
+local pausedTracks = {}
+
+-- Create Karate Kick Indicator GUI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "KarateKickGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = Services.CoreGui
+
+local statusFrame = Instance.new("Frame")
+statusFrame.Size = UDim2.new(0, 180, 0, 40)
+statusFrame.Position = UDim2.new(0.5, -90, 0.85, 0)
+statusFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+statusFrame.BackgroundTransparency = 0.2
+statusFrame.Visible = false
+statusFrame.Parent = screenGui
+Instance.new("UICorner", statusFrame).CornerRadius = UDim.new(0, 20)
+
+local uiStroke = Instance.new("UIStroke")
+uiStroke.Color = Color3.fromRGB(0, 255, 120)
+uiStroke.Thickness = 2
+uiStroke.Parent = statusFrame
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, 0, 1, 0)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Karate Kick: ON"
+statusLabel.Font = Enum.Font.GothamBold
+statusLabel.TextSize = 14
+statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+statusLabel.Parent = statusFrame
+
+-- Disable/Pause active character animations safely using AdjustSpeed & AdjustWeight
+local function disableCharacterAnimations()
+    pausedTracks = {}
+    if humanoid then
+        local animator = humanoid:FindFirstChildOfClass("Animator") or humanoid
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            if track ~= CurrentTrack then
+                table.insert(pausedTracks, track)
+                track:AdjustWeight(0, 0.05)
+                track:AdjustSpeed(0)
+            end
+        end
+    end
+end
+
+-- Re-enable default character animations safely
+local function enableCharacterAnimations()
+    for _, track in ipairs(pausedTracks) do
+        if track then
+            track:AdjustSpeed(1)
+            track:AdjustWeight(1, 0.05)
+        end
+    end
+    pausedTracks = {}
+end
+
+local function LoadTrack(id, duration)
+    if CurrentTrack then 
+        CurrentTrack:Stop(0) 
+    end
+
+    local animId
+    local ok, result = pcall(function()
+        return game:GetObjects("rbxassetid://" .. tostring(id))
+    end)
+
+    if ok and result and #result > 0 then
+        local anim = result[1]
+        if anim:IsA("Animation") then
+            animId = anim.AnimationId
+        else
+            animId = "rbxassetid://" .. tostring(id)
+        end
+    else
+        animId = "rbxassetid://" .. tostring(id)
+    end
+
+    local newAnim = Instance.new("Animation")
+    newAnim.AnimationId = animId
+    local newTrack = humanoid:LoadAnimation(newAnim)
+    newTrack.Priority = Enum.AnimationPriority.Action4
+
+    local weight = Settings["Weight"]
+    if weight == 0 then
+        weight = 0.001
+    end
+
+    disableCharacterAnimations()
+
+    newTrack:Play(Settings["Fade In"], weight, Settings["Speed"])
+    
+    CurrentTrack = newTrack
+    CurrentTrack.TimePosition = math.clamp(Settings["Time Position"], 0, 1) * CurrentTrack.Length
+
+    -- If duration is specified, stop after that time
+    if duration then
+        task.delay(duration, function()
+            if CurrentTrack == newTrack then
+                newTrack:Stop(Settings["Fade Out"])
+                CurrentTrack = nil
+                enableCharacterAnimations()
+            end
+        end)
+    else
+        newTrack.Stopped:Connect(function()
+            enableCharacterAnimations()
+        end)
+    end
+
+    return newTrack
+end
+
+local function StopTrack()
+    if CurrentTrack then
+        CurrentTrack:Stop(Settings["Fade Out"])
+        CurrentTrack = nil
+    end
+    enableCharacterAnimations()
+end
+
+-- Hook onto Combat Tool & Setup Click Listener
+local function bindCombatTool(combatTool)
+    combatTool.Equipped:Connect(function()
+        statusFrame.Visible = true
+    end)
+
+    combatTool.Unequipped:Connect(function()
+        statusFrame.Visible = false
+        StopTrack()
+    end)
+
+    combatTool.Activated:Connect(function()
+        -- Play kick emote for exactly 0.9 seconds per click, then stop
+        LoadTrack(71877088928091, 0.9)
+    end)
+end
+
+-- Setup Karate Tool Logic (Equips Combat & handles 3-second hold)
+local function setupKarateTool(toolInstance)
+    local isHolding = false
+    local holdThread
+
+    toolInstance.Equipped:Connect(function()
+        local backpack = player:FindFirstChild("Backpack")
+        if backpack then
+            local combatTool = backpack:FindFirstChild("Combat")
+            if combatTool and humanoid then
+                humanoid:EquipTool(combatTool)
+            end
+        end
+    end)
+
+    toolInstance.Activated:Connect(function()
+        isHolding = true
+        
+        holdThread = task.spawn(function()
+            task.wait(3)
+            if isHolding then
+                LoadTrack(139537675592509)
+            end
+        end)
+    end)
+
+    toolInstance.Deactivated:Connect(function()
+        isHolding = false
+        if holdThread then
+            task.cancel(holdThread)
+        end
+    end)
+end
+
+-- Check existing items or dynamically bind Combat tool
+local function checkAndBindCombat()
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        local combat = backpack:FindFirstChild("Combat")
+        if combat then
+            bindCombatTool(combat)
+        end
+    end
+
+    if character then
+        local combat = character:FindFirstChild("Combat")
+        if combat then
+            statusFrame.Visible = true
+            bindCombatTool(combat)
+        end
+    end
+end
+
+-- Create the Karate Tool
+local tool = Instance.new("Tool")
+tool.Name = "Karate"
+tool.RequiresHandle = false
+tool.Parent = player:WaitForChild("Backpack")
+setupKarateTool(tool)
+checkAndBindCombat()
+
+-- Listen for Combat tool added dynamically
+player.Backpack.ChildAdded:Connect(function(child)
+    if child.Name == "Combat" and child:IsA("Tool") then
+        bindCombatTool(child)
+    end
+end)
+
+character.ChildAdded:Connect(function(child)
+    if child.Name == "Combat" and child:IsA("Tool") then
+        statusFrame.Visible = true
+        bindCombatTool(child)
+    end
+end)
+
+-- Collision / Invisibility handling
+local originalCollisionStates = {}
+local lastFixClipState = Settings and Settings["Allow Invisible"]
+
+local function saveCollisionStates()
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") and part ~= rootPart then
+            originalCollisionStates[part] = part.CanCollide
+        end
+    end
+end
+
+local function disableCollisionsExceptRootPart()
+    if not Settings or not Settings["Allow Invisible"] then
+        return
+    end
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") and part ~= rootPart then
+            part.CanCollide = false
+        end
+    end
+end
+
+local function restoreCollisionStates()
+    for part, canCollide in pairs(originalCollisionStates) do
+        if part and part.Parent then
+            part.CanCollide = canCollide
+        end
+    end
+    originalCollisionStates = {}
+end
+
+saveCollisionStates()
+
+local connection
+connection = RunService.Stepped:Connect(function()
+    if character and character.Parent then
+        local currentFixClip = Settings and Settings["Allow Invisible"]
+        if lastFixClipState ~= currentFixClip then
+            if currentFixClip then
+                saveCollisionStates()
+                disableCollisionsExceptRootPart()
+            else
+                restoreCollisionStates()
+            end
+            lastFixClipState = currentFixClip
+        elseif currentFixClip then
+            disableCollisionsExceptRootPart()
+        end
+    else
+        restoreCollisionStates()
+        connection:Disconnect()
+    end
+end)
+
+player.CharacterAdded:Connect(function(newCharacter)
+    restoreCollisionStates()
+    character = newCharacter
+    humanoid = character:WaitForChild("Humanoid")
+    rootPart = character:WaitForChild("HumanoidRootPart")
+    
+    statusFrame.Visible = false
+
+    local newTool = Instance.new("Tool")
+    newTool.Name = "Karate"
+    newTool.RequiresHandle = false
+    newTool.Parent = player:WaitForChild("Backpack")
+    setupKarateTool(newTool)
+    checkAndBindCombat()
+    
+    saveCollisionStates()
+    lastFixClipState = Settings and Settings["Allow Invisible"]
+    
+    if connection then
+        connection:Disconnect()
+    end
+    
+    connection = RunService.Stepped:Connect(function()
+        if character and character.Parent then
+            local currentFixClip = Settings and Settings["Allow Invisible"]
+            if lastFixClipState ~= currentFixClip then
+                if currentFixClip then
+                    saveCollisionStates()
+                    disableCollisionsExceptRootPart()
+                else
+                    restoreCollisionStates()
+                end
+                lastFixClipState = currentFixClip
+            elseif currentFixClip then
+                disableCollisionsExceptRootPart()
+            end
+        else
+            restoreCollisionStates()
+            connection:Disconnect()
+        end
+    end)
+end)
