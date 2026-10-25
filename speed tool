@@ -1,0 +1,145 @@
+--// Services & References
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+
+--// Configuration
+local TOOL_NAME = "Superman Tool"
+local TP_WALK_SPEED = 7 -- Superman tpwalk speed factor
+
+-- Emote Animation IDs
+local IDLE_EMOTE_ID = 98353973763565
+local MOVE_EMOTE_ID = 120175909400154 -- Updated walk emote
+
+--// State Variables
+local isEquipped = false
+local currentTrack = nil
+local lastEmoteId = nil
+
+local character, humanoid, rootPart
+local tpWalkConnection
+
+--// Character Setup & Updates
+local function updateCharacter()
+    character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    if character then
+        humanoid = character:WaitForChild("Humanoid")
+        rootPart = character:WaitForChild("HumanoidRootPart")
+    end
+end
+
+--// Animation Loader Helper
+local function loadAndPlayEmote(hum, animId)
+    if lastEmoteId == animId and currentTrack and currentTrack.IsPlaying then
+        return
+    end
+
+    if currentTrack then
+        currentTrack:Stop(0.15)
+        currentTrack = nil
+    end
+
+    lastEmoteId = animId
+    local fullAnimId = "rbxassetid://" .. tostring(animId)
+    
+    local ok, result = pcall(function() return game:GetObjects(fullAnimId) end)
+    if ok and result and #result > 0 and result[1]:IsA("Animation") then
+        fullAnimId = result[1].AnimationId
+    end
+
+    local anim = Instance.new("Animation")
+    anim.AnimationId = fullAnimId
+    
+    local track = hum:LoadAnimation(anim)
+    track.Priority = Enum.AnimationPriority.Action4
+    track:Play(0.15, 1, 1)
+    
+    currentTrack = track
+end
+
+local function stopEmotes()
+    if currentTrack then
+        currentTrack:Stop(0.15)
+        currentTrack = nil
+        lastEmoteId = nil
+    end
+end
+
+--// Superman Movement Loop
+local function startSupermanMovement()
+    if tpWalkConnection then tpWalkConnection:Disconnect() end
+
+    tpWalkConnection = RunService.RenderStepped:Connect(function(deltaTime)
+        if not isEquipped or not character or not humanoid or not rootPart or humanoid.Health <= 0 then
+            return
+        end
+
+        local moveDir = humanoid.MoveDirection
+        local isMoving = moveDir.Magnitude > 0
+
+        -- Dynamic Emote Animation State Update
+        if isMoving then
+            loadAndPlayEmote(humanoid, MOVE_EMOTE_ID)
+            
+            -- Teleport-walk position update for high-speed Superman movement
+            local deltaPosition = moveDir * (TP_WALK_SPEED * 10) * deltaTime
+            rootPart.CFrame = rootPart.CFrame + deltaPosition
+        else
+            loadAndPlayEmote(humanoid, IDLE_EMOTE_ID)
+        end
+    end)
+end
+
+local function stopSupermanMovement()
+    if tpWalkConnection then
+        tpWalkConnection:Disconnect()
+        tpWalkConnection = nil
+    end
+    stopEmotes()
+end
+
+--// Tool Spawner & Event Bindings
+local function createInventoryTool()
+    local backpack = LocalPlayer:WaitForChild("Backpack")
+    
+    -- Clean up duplicate existing tools
+    local existingTool = backpack:FindFirstChild(TOOL_NAME) or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild(TOOL_NAME))
+    if existingTool then
+        existingTool:Destroy()
+    end
+
+    -- Create new Tool
+    local tool = Instance.new("Tool")
+    tool.Name = TOOL_NAME
+    tool.RequiresHandle = false
+    tool.CanBeDropped = false
+
+    -- Bind Tool Events
+    tool.Equipped:Connect(function()
+        isEquipped = true
+        updateCharacter()
+        startSupermanMovement()
+    end)
+
+    tool.Unequipped:Connect(function()
+        isEquipped = false
+        stopSupermanMovement()
+    end)
+
+    tool.Parent = backpack
+end
+
+-- Reset & Re-give tool on character respawn
+LocalPlayer.CharacterAdded:Connect(function()
+    isEquipped = false
+    stopSupermanMovement()
+    task.wait(1)
+    updateCharacter()
+    createInventoryTool()
+end)
+
+-- Initial Execution
+updateCharacter()
+createInventoryTool()
